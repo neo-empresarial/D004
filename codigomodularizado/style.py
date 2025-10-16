@@ -56,7 +56,7 @@ def get_header_html():
     <div class="header">
         <h1>Processador de Relatórios</h1>
         <div class="logo-container">
-            <img src="https://i.postimg.cc/jjqqgPv6/logo-neo.png" alt="Logo da NEO" class="logo">
+            <img src="https://i.postimg.cc/2y7yXY7z/Logo-NEO-horiz-transp-inv-3.png" alt="Logo da NEO" class="logo">
             <img src="https://docol65anos.com.br/temp/logo-docol.png" alt="Logo da Docol" class="logo">
         </div>
     </div>
