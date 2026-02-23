@@ -95,7 +95,13 @@ def processar_dados_geral(files, fator_reducao=0.9075):
     # --- 3.1 Aplicação do Fator PIS/COFINS (NOVA LÓGICA) ---
     # Cria regex para buscar '2833000' ou '3267700' dentro do código do material
     pat_excecao = '|'.join(MATERIAIS_EXCECAO_REDUCAO)
-    mask_excecao = df_completo['Material'].astype(str).str.contains(pat_excecao, na=False)
+    
+    # A máscara agora exige DUAS condições simultâneas:
+    # 1. Conter o material da exceção E 2. Ser do fornecedor específico (1028618)
+    mask_material_excecao = df_completo['Material'].astype(str).str.contains(pat_excecao, na=False)
+    mask_fornecedor_excecao = pd.to_numeric(df_completo['Cliente/Fornec'], errors='coerce') == 1028618
+    
+    mask_excecao = mask_material_excecao & mask_fornecedor_excecao
     
     # Aplica o fator apenas onde NÃO for exceção (reduz o valor líquido)
     df_completo.loc[~mask_excecao, 'Valor líquido'] = df_completo.loc[~mask_excecao, 'Valor líquido'] * fator_reducao
@@ -106,7 +112,13 @@ def processar_dados_geral(files, fator_reducao=0.9075):
     cols_existentes = [c for c in cols_identificacao if c in df_completo.columns]
     
     if cols_existentes:
-        df_fornecedores = df_completo.groupby(cols_existentes)['Valor líquido'].sum().reset_index()
+        # PREENCHE OS VAZIOS PARA O PYTHON NÃO EXCLUIR A LINHA
+        if 'CPF/CNPJ' in df_completo.columns:
+            df_completo['CPF/CNPJ'] = df_completo['CPF/CNPJ'].fillna('Exterior/Não Informado')
+            
+        # O pulo do gato: dropna=False garante que ninguém suma
+        df_fornecedores = df_completo.groupby(cols_existentes, dropna=False)['Valor líquido'].sum().reset_index()
+        
         df_fornecedores.rename(columns={'Valor líquido': 'Faturamento Total', 'Origem_Classificacao': 'Classificação'}, inplace=True)
         df_fornecedores = df_fornecedores.sort_values('Faturamento Total', ascending=False)
     else:
@@ -162,8 +174,9 @@ def processar_dados_geral(files, fator_reducao=0.9075):
             "Tipo_Linha": "Total"
         })
         
-        # 2. Granularização (Local, Importado, Fora)
-        for origem in ['Local', 'Importado', 'Fora']:
+        # 2. Granularização (APENAS Local e Fora)
+        # Removido 'Importado' pois Beneficiamento e Sucata não vêm do exterior
+        for origem in ['Local', 'Fora']:
             mask_origem = mask_principal & (df_completo['Origem_Classificacao'] == origem)
             
             val_fin = df_completo.loc[mask_origem, 'Valor líquido'].sum()
@@ -191,11 +204,19 @@ def processar_dados_geral(files, fator_reducao=0.9075):
 
     df_resumo_socio = pd.DataFrame(lista_resultados)
     
-    # Metadados para exibição
+    # Calcula a quebra do Total Geral por Origem
+    total_geral_local = df_completo.loc[df_completo['Origem_Classificacao'] == 'Local', 'Valor líquido'].sum()
+    total_geral_fora = df_completo.loc[df_completo['Origem_Classificacao'] == 'Fora', 'Valor líquido'].sum()
+    total_geral_importado = df_completo.loc[df_completo['Origem_Classificacao'] == 'Importado', 'Valor líquido'].sum()
+
+    # Metadados para exibição (Agora incluindo a quebra geográfica do Total Geral)
     meta_dados = {
         "MP_Fin": total_mp_fin,
         "MP_Kg": total_mp_kg,
-        "Geral_Fin": total_geral_fin
+        "Geral_Fin": total_geral_fin,
+        "Geral_Local": total_geral_local,
+        "Geral_Fora": total_geral_fora,
+        "Geral_Importado": total_geral_importado
     }
 
     return {
@@ -224,8 +245,8 @@ def gerar_excel_socioeconomico(resultados):
         df_socio.to_excel(writer, sheet_name=sheet_name, index=False, startrow=1)
         ws = writer.sheets[sheet_name]
         
-        # Cabeçalho customizado
-        ws.write(0, 0, "Detalhamento Granularizado (Local x Importado x Fora)", fmt_bold)
+        # Cabeçalho customizado ajustado para refletir a nova quebra
+        ws.write(0, 0, "Detalhamento Granularizado (Local x Fora)", fmt_bold)
         
         # Formatação das Colunas
         ws.set_column('A:A', 35) # Categoria
@@ -244,6 +265,16 @@ def gerar_excel_socioeconomico(resultados):
         
         ws.write(row_base+3, 0, "Total Fin. Geral (s/ Frete)")
         ws.write(row_base+3, 1, resultados['meta_dados']['Geral_Fin'], fmt_money)
+
+        # NOVA PARTE: Quebra do Total Geral
+        row_quebra = row_base + 5
+        ws.write(row_quebra, 0, "QUEBRA DO TOTAL GERAL POR ORIGEM", fmt_bold)
+        ws.write(row_quebra+1, 0, "Geral - Local")
+        ws.write(row_quebra+1, 1, resultados['meta_dados']['Geral_Local'], fmt_money)
+        ws.write(row_quebra+2, 0, "Geral - Fora")
+        ws.write(row_quebra+2, 1, resultados['meta_dados']['Geral_Fora'], fmt_money)
+        ws.write(row_quebra+3, 0, "Geral - Importado")
+        ws.write(row_quebra+3, 1, resultados['meta_dados']['Geral_Importado'], fmt_money)
 
         # --- ABA 2: FORNECEDORES ---
         if not resultados['df_fornecedores'].empty:
